@@ -10,19 +10,8 @@ jobs:
     steps:
       - checkout
       - setup_remote_docker
-      - run:
-          name: build
-          command: make build
-      - run:
-          name: test
-          command: make test
-      - slack/status: &slack_status
-          fail_only: true
-          only_for_branches: master
-          failure_message: ":facepalm:  Failed job $CIRCLE_JOB  :homer-disappear:"
-          include_job_number_field: false
-  build_and_deploy_to_test:
-    working_directory: ~/circle/git/fb-base-adapter
+  build_and_push_image:
+    working_directory: ~/circle/git/fb-adapter-template
     docker: &ecr_image
       - image: $AWS_BUILD_IMAGE_ECR_ACCOUNT_URL
         aws_auth:
@@ -47,45 +36,45 @@ jobs:
           environment:
             ENVIRONMENT_NAME: test
           command: './deploy-scripts/bin/build'
+      - slack/status: &slack_status
+          fail_only: true
+          only_for_branches: master
+          failure_message: ":facepalm:  Failed job $CIRCLE_JOB  :homer-disappear:"
+          include_job_number_field: false
+  deploy_to_test:
+    working_directory: ~/circle/git/fb-adapter-template
+    docker: *ecr_image
+    steps:
+      - checkout
+      - setup_remote_docker
+      - add_ssh_keys:
+          fingerprints:
+            - "10:76:81:db:22:4d:03:9a:33:e8:3b:64:a7:34:0c:e2"
+      - run:
+          name: Setup base environment variable
+          command: |
+            echo "export BUILD_SHA=$CIRCLE_SHA1" >> $BASH_ENV
+            echo "export SSH_FILE_FOR_SECRETS=~/.ssh/id_rsa_107681db224d039a33e83b64a7340ce2" >> $BASH_ENV
+      - run: *deploy_scripts
       - run:
           name: deploy to test environment in new cluster
           environment:
-            APPLICATION_NAME: fb-base-adapter
+            APPLICATION_NAME: fb-adapter-template
             PLATFORM_ENV: test
             K8S_NAMESPACE: formbuilder-base-adapter-test
           command: './deploy-scripts/bin/deploy-eks'
       - slack/status: *slack_status
-  acceptance_tests:
-    docker: *ecr_image
-    resource_class: large
-    steps:
-      - setup_remote_docker
-      - run: *deploy_scripts
-      - run:
-          name: Run acceptance tests
-          command: './deploy-scripts/bin/acceptance_tests'
-      - slack/status:
-          only_for_branches: master
-          success_message: ":rocket:  Successfully deployed to Test  :guitar:"
-          failure_message: ":facepalm:  Acceptance tests failed  :homer-disappear:"
-          include_job_number_field: false
 
 workflows:
   version: 2
   release:
     jobs:
-      - tests
-      - build_and_deploy_to_test:
-          requires:
-            - tests
+      - build_and_push_image:
           filters:
             branches:
               only:
-                - master
-                - deploy-to-test
-      - acceptance_tests:
+                - main
+                - circleci-project-setup
+      - deploy_to_test:
           requires:
-            - build_and_deploy_to_test
-          filters:
-            branches:
-              only: master
+            - build_and_push_image
